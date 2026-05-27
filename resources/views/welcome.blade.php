@@ -198,7 +198,7 @@
                                 <li class="list-group-item">
                                     <strong>${inter.drug1}</strong> &harr; <strong>${inter.drug2}</strong>
                                     ${severityBadge}
-                                    <br><small class="text-muted">${inter.label}</small>
+                                    <br><small class="text-muted">${inter.label || 'Unbekannte Wechselwirkung'}</small>
                                 </li>`;
                         });
 
