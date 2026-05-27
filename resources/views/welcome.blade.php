@@ -4,6 +4,7 @@
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="robots" content="noindex, nofollow">
+        <meta name="csrf-token" content="{{ csrf_token() }}">
 
         <title>{{ config('app.name', 'Laravel') }}</title>
 
@@ -22,9 +23,10 @@
                 font-size: 0.6rem;
                 padding: 0.15rem;
             }
-            .dropdown-menu {
+            #drugDropdown {
                 max-height: 250px;
                 overflow-y: auto;
+                display: none;
             }
         </style>
     </head>
@@ -48,13 +50,10 @@
                                         type="text"
                                         id="drugSearch"
                                         class="form-control"
-                                        placeholder="Medikament suchen (z.B. aspirin, ibuprofen)..."
+                                        placeholder="Medikament suchen..."
                                         autocomplete="off"
                                     >
-                                    <ul id="drugDropdown" class="dropdown-menu w-100" style="display: none;"></ul>
-                                    <div id="searchSpinner" class="position-absolute top-50 end-0 translate-middle-y me-3" style="display: none;">
-                                        <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-                                    </div>
+                                    <ul id="drugDropdown" class="dropdown-menu w-100"></ul>
                                 </div>
 
                                 <div id="selectedDrugs" class="d-flex flex-wrap gap-2 mb-4"></div>
@@ -65,12 +64,6 @@
                                 </button>
 
                                 <div id="results" class="mt-4" style="display: none;"></div>
-
-                                <div class="mt-3">
-                                    <small class="text-muted">
-                                        Daten bereitgestellt von <a href="https://open.fda.gov/" target="_blank" rel="noopener">openFDA</a>
-                                    </small>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -79,13 +72,15 @@
         </main>
 
         <script>
-            const FDA_BASE = 'https://api.fda.gov/drug/label.json';
+            let drugNames = [];
             let selectedDrugs = [];
-            let searchTimeout = null;
+
+            fetch('/data/drug_names.json')
+                .then(r => r.json())
+                .then(names => { drugNames = names; });
 
             const searchInput = document.getElementById('drugSearch');
             const dropdown = document.getElementById('drugDropdown');
-            const searchSpinner = document.getElementById('searchSpinner');
             const selectedContainer = document.getElementById('selectedDrugs');
             const checkBtn = document.getElementById('checkBtn');
             const checkBtnText = document.getElementById('checkBtnText');
@@ -93,64 +88,39 @@
             const resultsDiv = document.getElementById('results');
 
             searchInput.addEventListener('input', () => {
-                const query = searchInput.value.trim();
-                clearTimeout(searchTimeout);
+                const query = searchInput.value.trim().toLowerCase();
+                dropdown.innerHTML = '';
 
-                if (query.length < 2) {
+                if (query.length < 1) {
                     dropdown.style.display = 'none';
                     return;
                 }
 
-                searchTimeout = setTimeout(() => searchDrugs(query), 400);
-            });
+                const matches = drugNames
+                    .filter(d => d.includes(query) && !selectedDrugs.includes(d))
+                    .slice(0, 20);
 
-            async function searchDrugs(query) {
-                searchSpinner.style.display = 'block';
-                dropdown.style.display = 'none';
-
-                try {
-                    const url = `${FDA_BASE}?search=openfda.generic_name:${encodeURIComponent(query)}*&count=openfda.generic_name.exact&limit=15`;
-                    const res = await fetch(url);
-                    const data = await res.json();
-
-                    const drugs = (data.results || [])
-                        .map(r => r.term)
-                        .filter(name => {
-                            const lower = name.toLowerCase();
-                            return lower.includes(query.toLowerCase())
-                                && !selectedDrugs.includes(name);
-                        });
-
-                    dropdown.innerHTML = '';
-
-                    if (drugs.length === 0) {
-                        const li = document.createElement('li');
-                        li.innerHTML = '<span class="dropdown-item text-muted">Keine Ergebnisse</span>';
-                        dropdown.appendChild(li);
-                    } else {
-                        drugs.forEach(drug => {
-                            const li = document.createElement('li');
-                            const a = document.createElement('a');
-                            a.className = 'dropdown-item';
-                            a.href = '#';
-                            a.textContent = drug.toLowerCase();
-                            a.addEventListener('click', e => {
-                                e.preventDefault();
-                                addDrug(drug);
-                            });
-                            li.appendChild(a);
-                            dropdown.appendChild(li);
-                        });
-                    }
-
-                    dropdown.style.display = 'block';
-                } catch {
-                    dropdown.innerHTML = '<li><span class="dropdown-item text-danger">Fehler bei der Suche</span></li>';
-                    dropdown.style.display = 'block';
-                } finally {
-                    searchSpinner.style.display = 'none';
+                if (matches.length === 0) {
+                    dropdown.style.display = 'none';
+                    return;
                 }
-            }
+
+                matches.forEach(drug => {
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.className = 'dropdown-item';
+                    a.href = '#';
+                    a.textContent = drug;
+                    a.addEventListener('click', e => {
+                        e.preventDefault();
+                        addDrug(drug);
+                    });
+                    li.appendChild(a);
+                    dropdown.appendChild(li);
+                });
+
+                dropdown.style.display = 'block';
+            });
 
             document.addEventListener('click', e => {
                 if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
@@ -179,25 +149,10 @@
                 selectedDrugs.forEach(drug => {
                     const tag = document.createElement('span');
                     tag.className = 'drug-tag bg-primary bg-opacity-10 text-primary';
-                    tag.innerHTML = `${drug.toLowerCase()} <button type="button" class="btn-close" aria-label="Remove"></button>`;
+                    tag.innerHTML = `${drug} <button type="button" class="btn-close" aria-label="Entfernen"></button>`;
                     tag.querySelector('.btn-close').addEventListener('click', () => removeDrug(drug));
                     selectedContainer.appendChild(tag);
                 });
-            }
-
-            function extractRelevantText(fullText, drugName) {
-                const sentences = fullText.split(/(?<=[.!?])\s+/);
-                const drugWords = drugName.toLowerCase().split(/[,\s]+/).filter(w => w.length > 3);
-                const relevant = [];
-
-                for (const sentence of sentences) {
-                    const lower = sentence.toLowerCase();
-                    if (drugWords.some(w => lower.includes(w))) {
-                        relevant.push(sentence.trim());
-                    }
-                }
-
-                return relevant.join(' ').substring(0, 500) || null;
             }
 
             checkBtn.addEventListener('click', async () => {
@@ -208,50 +163,21 @@
                 checkBtnText.textContent = 'Prüfe...';
                 resultsDiv.style.display = 'none';
 
-                const found = [];
-
                 try {
-                    for (let i = 0; i < selectedDrugs.length; i++) {
-                        const drugA = selectedDrugs[i];
-                        const primaryName = drugA.split(/[,\s]+/)[0];
+                    const res = await fetch('/api/interactions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                        },
+                        body: JSON.stringify({ drugs: selectedDrugs }),
+                    });
 
-                        const url = `${FDA_BASE}?search=openfda.generic_name:"${encodeURIComponent(primaryName)}"+AND+_exists_:drug_interactions&limit=3`;
-                        const res = await fetch(url);
-
-                        if (!res.ok) continue;
-
-                        const data = await res.json();
-                        const results = data.results || [];
-
-                        for (const label of results) {
-                            const interactionText = (label.drug_interactions || []).join(' ');
-                            if (!interactionText) continue;
-
-                            for (let j = 0; j < selectedDrugs.length; j++) {
-                                if (i === j) continue;
-                                const drugB = selectedDrugs[j];
-                                const drugBWords = drugB.toLowerCase().split(/[,\s]+/).filter(w => w.length > 3);
-                                const textLower = interactionText.toLowerCase();
-
-                                if (drugBWords.some(w => textLower.includes(w))) {
-                                    const key = [drugA, drugB].sort().join('|||');
-                                    if (!found.some(f => f.key === key)) {
-                                        const excerpt = extractRelevantText(interactionText, drugB);
-                                        found.push({
-                                            key,
-                                            drugA: drugA.toLowerCase(),
-                                            drugB: drugB.toLowerCase(),
-                                            description: excerpt || 'Wechselwirkung in FDA-Label dokumentiert.'
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    const data = await res.json();
 
                     resultsDiv.style.display = 'block';
 
-                    if (found.length === 0) {
+                    if (data.count === 0) {
                         resultsDiv.innerHTML = `
                             <div class="alert alert-success">
                                 <strong>Keine Wechselwirkungen gefunden</strong> zwischen den ausgewählten Medikamenten.
@@ -259,22 +185,27 @@
                     } else {
                         let html = `
                             <div class="alert alert-warning">
-                                <strong>${found.length} Wechselwirkung(en) gefunden:</strong>
+                                <strong>${data.count} Wechselwirkung(en) gefunden:</strong>
                             </div>
                             <ul class="list-group">`;
 
-                        found.forEach(inter => {
+                        data.interactions.forEach(inter => {
+                            const severityBadge = inter.severity
+                                ? `<span class="badge bg-danger ms-2">${inter.severity}</span>`
+                                : '';
+
                             html += `
                                 <li class="list-group-item">
-                                    <strong>${inter.drugA}</strong> &harr; <strong>${inter.drugB}</strong>
-                                    <br><small class="text-muted">${inter.description}</small>
+                                    <strong>${inter.drug1}</strong> &harr; <strong>${inter.drug2}</strong>
+                                    ${severityBadge}
+                                    <br><small class="text-muted">${inter.label}</small>
                                 </li>`;
                         });
 
                         html += '</ul>';
                         resultsDiv.innerHTML = html;
                     }
-                } catch (err) {
+                } catch {
                     resultsDiv.style.display = 'block';
                     resultsDiv.innerHTML = `
                         <div class="alert alert-danger">
